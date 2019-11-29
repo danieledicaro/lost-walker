@@ -1,6 +1,7 @@
 # SEMESTRAL PROJECT 2019
 
 Student: Daniele Di Caro (p19127)<br />
+University: Ostravská univerzita - Ostrava (Czech Republic)<br />
 Email: p19127@student.osu.cz , danieledicaro90@gmail.com
 #### Requirements
 It is required that:
