@@ -1,0 +1,349 @@
+; every time a walker stops in a safe place (so he is arrived), the variable 'finished' is increased by 1.
+; when the value is equal to the number of alive walkers, the simulation ends.
+globals [finished]
+
+breed [nodes node]
+breed [walkers walker]
+breed [apples apple]
+breed [holes hole]
+breed [animals animal]
+
+nodes-own [
+  resistance ; of the terrain, by which you can discriminate between road/grass/forest
+  visited ; counter from 0 to 3 that indicates how  many times a walker was on it
+  attraction ; measures the force of attraction, that is proportional to its distance from the center of the attraction point
+  repulsion ; measures the force of repulsion, that is proportional to its distance from the center of the repulsion point
+  animal-present] ; measure the force of repulsion due to an animal present in a range of 2 nodes
+
+walkers-own [
+  location ; indicates the node where the walker is at a moment
+  energy ; measures the life energy, from 0 to 100. 0 means death
+  effort ; measures how much strain the walker has. He starts with 0, meaning he is ready for a long walk! Over 50 he will need to rest.
+  strenght ; used during the fight with an animal. More strenght equals less decrease of energy after a battle.
+  last-nodes ; it's a vector that save the last 4 positions (so you can check if the walker is stuck in a cycle)
+  arrived] ; 1 means is has arrived to a safe place, so he will not move anymore. 0 otherwise
+
+apples-own [location] ; indicates the node where the apple is
+holes-own [location] ; indicates the node where the hole is
+animals-own [location] ; indicates the node where the animal is at a moment
+
+to setup
+  clear-all
+  set finished 0
+  setup-world
+  setup-apples
+  setup-holes
+  setup-animals
+  setup-walkers
+  reset-ticks
+end
+
+to go
+  check-animals-on-nodes ; check the nodes with animals (because they moved last time) in order to change the values of "animal-present"
+  ask walkers [
+    if arrived = 0 ; if the walker is arrived (= 1), then he will not move anymore
+    [
+      ifelse effort < walker-effort-limit [ ; if the walker has low effort, then he will move
+        ifelse pycor mod 2 = 0 ; basing on the coordinates, the calculation is slightly different (only a matter of coordinates, nothing more)
+        ; evaluating all the 6 nodes around the walker
+        [ set location ; where to save the new location
+          min-one-of ; take the minimum "calc-next-node" among
+          (nodes at-points [[0 1] [1 0] [0 -1] [-1 -1] [-1 0] [-1 1]]) ; the 6 nodes around the walker
+          [ calc-next-node] ; returning the "total weigth" of each node
+        ]
+        ; (ELSE) the same but for different coordinates
+        [ set location min-one-of (nodes at-points [[0 1] [1 1] [1 0] [1 -1] [0 -1] [-1 0]]) [ calc-next-node] ]
+        face location ; look at the new location
+        move-to location ; move there
+        mark-as-visited ; mark the new location as visited
+      ]
+      ; (ELSE) the walker has a lot of effort (>= limit), then he takes a rest for this tick (he won't move), the effort will be decreased significantly and the energy slightly increased
+      [ set effort ( effort - round(walker-effort-limit / 3 - 1)) ; the amout of decrease is calculated basing on the limit, so that it has sense (i.e. limit=50 -> decrease of 16)
+        if use-energy [if energy < 100 [set energy (energy + 1)]]
+      ]
+    ]
+  ]
+  ask animals [
+    let walker-location 0 ; if a walker is in the proximity (smell range) of the animal, in this variable will be saved its position
+    ; check the presence of walkers (who is still finding a safe place) and if yes save the position of one of them
+    ask [walkers in-radius animal-smell-range] of patch xcor ycor [ if arrived = 0 [set walker-location who] ]
+    ifelse walker-location != 0 ; if there is a position saved, turn your attention on that walker in order to follow him
+      [face walker walker-location]
+      [left random 360 ] ; (ELSE) if not, turn randomly
+    fd 1 ; go ahead
+  ]
+  ask walkers [
+    if arrived = 0 [ ; if the walker is arrived (= 1), then he doesn't need to make any calculation
+    if ticks mod 100 = 0 and use-effort [ set effort ( effort + 10) ] ; increase effort every 100 steps by 10
+    if ticks mod 5 = 0 and use-energy [ set energy ( energy - 1) ] ; decrease energy every 5 steps by 1
+    track-last-nodes ; check if finished
+    check-item ; check what is on the same location
+    if energy < 1 [die] ; check energy. if 0 then die
+    ]
+  ]
+  tick
+  ; if all the walkers died, then stop the simulation
+  if not any? walkers [ user-message "All Walker(s) died." stop ]
+  ; check the global variable to check if all the still living walkers are arrived in a safe place. If yes, stop the simulation.
+  if finished = count walkers [
+    user-message ( word (word count walkers " walker(s) stopped in a safe place and ") (word (walkers-number - count walkers) " died." )) stop
+    ]
+end
+
+; this procedure modifies the value of "animal-present" (owned by the nodes) basing on where the animals are
+to check-animals-on-nodes
+  ; since the animals are moving, before setting the values they need to be reset
+  ask nodes [ set animal-present 0 ]
+  ; every node in the "walker-hear-range" radius from the animal will have modified the value
+  ask animals [ask [nodes in-radius walker-hear-range] of patch xcor ycor [set animal-present 3] ]
+end
+
+; checking the presence of items on a location
+to check-item
+  ask apples at-points [[0 0]] ; if in the current location there is an apple
+    [ ask walkers at-points [[0 0]] ; then ask the walker in the same location to "eat" the apple so that
+      [ if use-energy [ifelse energy < (101 - apple-energy-increase) [set energy (energy + apple-energy-increase)] [set energy 100]] ; (if using energy) encrease energy by 10
+        if use-effort [ifelse effort >= apple-effort-decrease [set effort (effort - apple-effort-decrease)] [set effort 0]] ; (if using effort) decrease effort by 25
+    ] die ] ; after the walker ate the apple, it should not be available anymore (so the apple "dies")
+  ask holes at-points [[0 0]] ; if in the current location there is a hole
+    [ ask walkers at-points [[0 0]] ; then ask the walker in the same location to "come out" the hole where he fell into
+      [ if use-energy [set energy (energy - hole-energy-decrease)] ; (if using energy) decrease energy by 1
+        if use-effort [set effort (effort + hole-effort-increase - round(strenght / 2) )] ; (if using effort) encrease effort by 15 minus a value calcolated using the strenght of the walker
+    ]]
+  ask animals at-points [[0 0]] ; if in the current location there is an animal
+    [ ask walkers at-points [[0 0]] ; the ask the walker in the same location to "fight" with it
+      [ if use-energy [set energy (energy - animal-energy-decrease + round(strenght / 2) )] ; (if using energy) decrease energy by 10 plus a value calcolated using the strenght of the walker
+        if use-effort [set effort (effort + animal-effort-increase - strenght)] ; (if using effort) encrease effort by 50 minus the strenght of the walker
+    ] die ] ; after the walker fought the animal, it dies
+end
+
+; procedure for tracking the lasts 4 moves of a walker
+to track-last-nodes
+  ; in the vector there will be tracked only the last 4 moves
+  if length last-nodes > 3 ; so if the length is > 3 (it means 4)
+    [
+    check-if-stuck ; go to the procedure to check if the walker is arrived
+    set last-nodes [] ; reset the vector for the next 4 nodes
+    ]
+  ; add to the vector the current position
+  let this-node 0
+  ask nodes at-points [[0 0]] [ set this-node who ]
+  set last-nodes lput this-node last-nodes
+end
+
+; by the vector "last-nodes" check if the walker are in a cycle (same moves)
+to check-if-stuck
+  let n1 item 0 last-nodes
+  let n2 item 1 last-nodes
+  let n3 item 2 last-nodes
+  let n4 item 3 last-nodes
+  if n1 = n3 and n2 = n4 [ ; if the last 4 steps are the same
+    let attraction-on-node 0
+    ask nodes at-points [[0 0]] [ set attraction-on-node attraction] ; save the value of attractivity of the current position
+    ; if yes it means that the walker is in a safe place
+    ; so set his own flag "arrived" to 1 and increment the global variable "finished" to let all know that 1 walker has stopped to walk
+    if attraction-on-node != 0 [set arrived 1 set finished (finished + 1)]
+  ]
+end
+
+; this procedure increments the value of "visited" owned by the nodes, so that later a walker can decide better his next move
+; the range is from 0 to 4, since that value will be used to calculate the next move of the walker and higher numbers would influence negatively the choice
+to mark-as-visited
+  ask nodes at-points [[0 0]] [ ; ask the node in the current position
+    if visited < 4 ; check if the value is already at the max value
+    [set visited (visited + 1)] ; increasing it
+  ]
+end
+
+; this is the procedure that calculates the "total" value of a node
+; this is the smaller procedure but the heart of the simulation, since it contains the equation that determines the path of the walker
+to-report calc-next-node
+  let total (resistance + visited + repulsion - attraction + animal-present)
+  report total
+end
+
+; catch the mouse click so that the attraction area can be created
+to setup-attraction
+  if mouse-down? [
+    let xy []
+    ; save the coordinates
+    set xy lput mouse-xcor xy
+    set xy lput mouse-ycor xy
+    build-attraction(xy) ; call the procedure responsible for the creation
+    stop
+  ]
+end
+
+; catch the mouse click so that the repulsive area can be built
+to setup-repulsion
+  if mouse-down? [
+    let xy []
+    ; save the coordinates
+    set xy lput mouse-xcor xy
+    set xy lput mouse-ycor xy
+    build-repulsion(xy) ; call the procedure responsible for the creation
+    stop
+  ]
+end
+
+; procedure that creates the attraction area
+; it receives as parameters a vector with the coordinates of the central point
+to build-attraction [ xy ]
+  let value attraction-max ; this is the value of attraction in the center of the area
+  ; isolate the x and y coordinates of the central point, in order to use later
+  let x-attraction item 0 xy
+  let y-attraction item 1 xy
+  ; "radius-work" is set by the user in the "interface" tab. since it will be changed during the calculations, in the "interface" tab the user can see the value changing
+  ; we need to avoid it, so we preserve the original value saving it into another value
+  let radius-work attraction-radius
+  ; the center of the attraction area has more "attractivity" than a point in the edge.
+  ; So we need to calculate the variation of the attractivity basing on the distance from the central point.
+  ; To do that, we are going to use "value-step". Starting from the border, every step we do to get closer to the central point, we will increase the "attractivity" by "value-step".
+  let value-step ( value / radius-work)
+  ; the initial value will be the lower one (so "value-step"), because we are going to start from the edge of the attraction area.
+  set value value-step
+  ; in order to display the attraction area scaling the color basing on the value of attractivity, we need to do something similar to what we did for the value
+  let color-scale 4
+  let color-step ( 5 / radius-work)
+  ; we will assign different values to the nodes basing on their distance to the central point
+  ; so we are going to select together the nodes in a precise radius, cause they have the same attractivity.
+  ; we repeat this from the edge to the central point (so "radius-work" times)
+  repeat radius-work [
+    ask [nodes in-radius radius-work] of patch x-attraction y-attraction ; select all the nodes in a precise distance (radius-work) from the center of attraction area (x,y coordinates)
+            [ set attraction value ; set the value of attractivity
+              set pcolor blue + color-scale ; modify the color so that the user can have a graphic feedback of the attractivity value
+             ]
+    set value ( value + value-step ) ; increase the value by value-step for the next cycle (closer nodes)
+    set radius-work radius-work - 1 ; decrease the radius to get closer to the center
+    set color-scale round(color-scale - color-step - 0.5) ; modify the color-scale (as has been done for the value). The "-0.5" is included to make the round() function work properly.
+  ]
+end
+
+; procedure that creates the repulsive area
+; symmetric with the costruction of the attraction area
+to build-repulsion [ xy ]
+  let value repulsion-max
+  let x-repulsion item 0 xy
+  let y-repulsion item 1 xy
+  let radius-work repulsion-radius
+  let value-step ( value / radius-work)
+  set value value-step
+  let color-scale 4
+  let color-step ( 5 / radius-work)
+  repeat radius-work [
+    ask [nodes in-radius radius-work] of patch x-repulsion y-repulsion [ set repulsion value set pcolor red + color-scale]
+    set value ( value + value-step )
+    set radius-work radius-work - 1
+    set color-scale round(color-scale - color-step - 0.5)
+  ]
+end
+
+; creation of the walkers and set of all the owned variables
+to setup-walkers
+  set-default-shape walkers "person"
+  create-walkers walkers-number [
+    set size 2
+    set color red
+    set effort 0
+    set energy 100
+    set strenght random 10 ; the strenght is a random value
+    set last-nodes []
+    set arrived 0
+    set location one-of nodes ; the starting point is randomly chosen
+    move-to location
+    mark-as-visited
+  ]
+end
+
+; creation of the apples
+to setup-apples
+  set-default-shape apples "apple"
+  create-apples apples-number [
+    set size 0.6
+    set color red
+    set location one-of nodes ; the location is randomly chosen
+    move-to location
+  ]
+end
+
+; creation of the holes
+to setup-holes
+  set-default-shape holes "dot"
+  create-holes holes-number [
+    set color black
+    set location one-of nodes ; the location is randomly chosen
+    move-to location
+  ]
+end
+
+; creation of the animals
+to setup-animals
+  set-default-shape animals "wolf 4"
+  create-animals animals-number [
+    set size 1.5
+    set color brown + 2
+    set location one-of nodes ; the location is randomly chosen
+    move-to location
+  ]
+end
+
+; creation of the terrain
+; this procedure uses a cycle in which each iteration creates one node basing on the information obtained from another procedure
+to setup-world
+  set-patch-size 11 ; the size of the patch
+  resize-world 0 40 0 40 ; configure the size of the world and the center of the axes
+  set-default-shape nodes "hex-rotated"
+  ; read the information of the first node outside the cycle, because the condition will analyze the content of the node's information
+  let place readLineFromFile
+  while [not empty? place] [ ; continue as long as receiving information
+    ; isolate the 3 information contained in the vector
+    let x item 0 place ; x coordinate
+    let y item 1 place ; y coordinate
+    let terrain item 2 place ; the type of terrain (we are going to use this value to set the resistivity)
+    create-nodes 1 [
+      setxy x y
+      set resistance terrain ; 1 for "road", 2 for "grass" and 4 for "forest"
+      set visited 0
+      set attraction 0
+      set repulsion 0
+      set animal-present 0
+      set color scale-color green resistance 5 1 ; scale the color basing on the type of terrain, so that the user can have a graphic feedback
+      set size 1.2 ]
+    set place readLineFromFile ] ; obtain the information of the following node
+  ask nodes [
+    ; since we use the "hex" shape, in order to fill up the world properly we shift 1 rows on the left every 2 rows
+    if pycor mod 2 = 0 ; every 2 rows
+      [ set xcor xcor - 0.5 ] ; shift the row along the x-axis
+    ; create the links between close-nodes
+    ; basing on the selected row, the coordinates to select are different (only a matter of coordinates, nothing more)
+    ifelse pycor mod 2 = 0
+      [ create-links-with nodes-on patches at-points [[0 1] [1 0] [0 -1]] ]
+      [ create-links-with nodes-on patches at-points [[1 0] [1 -1] [1 1]] ] ]
+  ask links [ hide-link ] ; don't show any graphic feedback for the links
+end
+
+; this procedure reads a line of the external file containing the information of all the locations of the world and report
+; after a file is opened, the pointer that let you access the data continues to go ahead every time you read a line, until you close the file
+; this means that every time this procedure is called, a new line is read
+; the "field-separator" refers to the separator of the information. For clarity in the examples we are going to use the character ';'
+to-report readLineFromFile
+  file-open file-name
+  let place [] ; prepare the vector for the node's information
+  ; check if not the end of file
+  ifelse not file-at-end? [
+    let line file-read-line ; take the entire line (consider that a line refers to the form 'x-coordinate;y-coordinate;type-of-terrain', i.e. '1;9;2')
+    ; we are going to analyze each line separating the value basing on the field-separator ';'
+    ; so with that character we isolate the single information
+    set line word line field-separator ; due to that, we need to add ';' at the end of the line (i.e. from '1;9;2' to '1;9;2;')
+    while [not empty? line] [ ; this cycle has many iterations as the number of the character ';' (so 3 iterations)
+      let value-end position field-separator line ; "value-end" will contain the position of the first occourrence of the character ';'
+      let value substring line 0 value-end ; we take the content of the string from the position 0 to the position took in previous line (so just the information we are interested in)
+      set value read-from-string value ; the information is stored as a string, so we need to cast the data type into a number
+      set place lput value place ; add the information into the vector
+      ; now we need to delete the already read information
+      ; to do that, we overwrite the string with the string that starts from the next position of the last read character to the end. '+1' is necessary to delete the ';'
+      set line substring line (value-end + 1) length line ] ; i.e. from '1;9;2;' to '9;2;'
+  ]
+  [ file-close ] ; (ELSE) close the file, so that you can re-open it again from the beginning clicking the "setup" button
+  report place ; return the vector with the information (if we already scanned the entire file, the vector will be empty)
+end
