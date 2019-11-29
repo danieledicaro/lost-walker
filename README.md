@@ -1,6 +1,6 @@
 # SEMESTRAL PROJECT 2019
 
-Student: Daniele Di Caro (p19127)
+Student: Daniele Di Caro (p19127)<br />
 Email: p19127@student.osu.cz , danieledicaro90@gmail.com
 #### Requirements
 It is required that:
@@ -77,8 +77,8 @@ In order to use it, you need to re-convert it in a CSV file (i.e. http://convert
 #### JSON content
 {  "terrain":["1,40,4","1,39,4","1,38,2"] }
 #### CSV content
-1,40,4
-1,39,4
+1,40,4<br />
+1,39,4<br />
 1,38,2
 
 ## JSON Content
